@@ -1,0 +1,20 @@
+depsversion = "0.0.0"
+
+name = "piot/relay-client-repl-c"
+version = "0.0.0"
+
+[[dependencies]]
+name = "piot/relay-client-udp-c"
+version = "0.0.0"
+
+[[dependencies]]
+name = "piot/guise-client-udp-c"
+version = "0.0.0"
+
+[[dependencies]]
+name = "piot/redline"
+version = "0.0.0"
+
+[[dependencies]]
+name = "piot/clash-c"
+version = "0.0.0"
