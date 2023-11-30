@@ -7,4 +7,4 @@ Makefile
 src/lib/conclave-client-cli
 .vscode
 build
-src/users.txt
+users.txt

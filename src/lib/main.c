@@ -94,7 +94,7 @@ int main(int argc, char** argv)
     guiseClientUdpReadSecret(&guiseSecret, indexToRead);
 
     ImprintDefaultSetup imprint;
-    imprintDefaultSetupInit(&imprint, 128 * 1024);
+    imprintDefaultSetupInit(&imprint, 8 * 1024 * 1024); // TODO: Investigate high memory usage(!)
 
     GuiseClientUdp guiseClient;
     guiseClientUdpInit(&guiseClient, 0, "127.0.0.1", 27004, &guiseSecret);
