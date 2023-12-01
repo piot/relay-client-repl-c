@@ -8,3 +8,4 @@ src/lib/conclave-client-cli
 .vscode
 build
 users.txt
+src/lib/relay-client-repl

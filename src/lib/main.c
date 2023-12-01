@@ -50,6 +50,8 @@ typedef struct App {
     const char* secret;
     RelayClientUdp relayClient;
     bool hasStartedRelayClient;
+    RelayListener* listener;
+    RelayConnector* connector;
     Clog log;
 } App;
 
@@ -65,7 +67,74 @@ static void onState(void* _self, const void* data, ClashResponse* response)
     }
 }
 
+typedef struct ListenCmd {
+    int verbose;
+    uint64_t applicationId;
+    int channelId;
+} ListenCmd;
+
+static ClashOption listenOptions[] = { { "applicationId", 'i', "the application ID",
+                                           ClashTypeUInt64 | ClashTypeArg, "42",
+                                           offsetof(ListenCmd, applicationId) },
+    { "channel", 'c', "channel to listen to", ClashTypeInt, "8", offsetof(ListenCmd, channelId) } };
+
+static void onListen(void* _self, const void* _data, ClashResponse* response)
+{
+    App* self = (App*)_self;
+    if (self->listener != 0) {
+        CLOG_C_WARN(&self->log, "listener is already set")
+        return;
+    }
+    const ListenCmd* data = (const ListenCmd*)_data;
+    RelaySerializeApplicationId applicationId = data->applicationId;
+    RelaySerializeChannelId channelId = (RelaySerializeChannelId)data->channelId;
+
+    self->listener
+        = relayClientStartListen(&self->relayClient.relayClient, applicationId, channelId);
+
+    (void)response;
+}
+
+typedef struct ConnectCmd {
+    int verbose;
+    uint64_t userId;
+    uint64_t applicationId;
+    int channelId;
+} ConnectCmd;
+
+static ClashOption connectOptions[] = {
+    { "userId", 'i', "the Guise userId to connect to", ClashTypeUInt64 | ClashTypeArg, "",
+        offsetof(ConnectCmd, userId) },
+    { "applicationId", 'i', "the application ID", ClashTypeUInt64, "42",
+        offsetof(ConnectCmd, applicationId) },
+    { "channel", 'c', "channel to connect to", ClashTypeInt, "8", offsetof(ConnectCmd, channelId) }
+};
+
+static void onConnect(void* _self, const void* _data, ClashResponse* response)
+{
+    App* self = (App*)_self;
+    if (self->connector != 0) {
+        CLOG_C_WARN(&self->log, "connector is already set")
+        return;
+    }
+
+    const ConnectCmd* data = (const ConnectCmd*)_data;
+
+    RelaySerializeApplicationId applicationId = data->applicationId;
+    RelaySerializeChannelId channelId = (RelaySerializeChannelId)data->channelId;
+    RelaySerializeUserId userId = (RelaySerializeUserId)data->userId;
+
+    self->connector
+        = relayClientStartConnect(&self->relayClient.relayClient, userId, applicationId, channelId);
+
+        (void) response;
+}
+
 static ClashCommand mainCommands[] = {
+    { "listen", "start listening on relay server", sizeof(ListenCmd), listenOptions,
+        sizeof(listenOptions) / sizeof(listenOptions[0]), 0, 0, onListen },
+    { "connect", "start connecting to listener on relay server", sizeof(ConnectCmd), connectOptions,
+        sizeof(connectOptions) / sizeof(connectOptions[0]), 0, 0, onConnect },
     { "state", "show state on relay client", 0, 0, 0, 0, 0, onState },
 };
 
@@ -114,13 +183,15 @@ int main(int argc, char** argv)
     relayClientUdpLog.constantPrefix = "relayClientUdp";
 
     const char* relayHost = "127.0.0.1";
-    const uint16_t relayPort = 27003;
+    const uint16_t relayPort = 27005;
 
     App app;
     app.secret = "working";
     app.hasStartedRelayClient = false;
     app.log.config = &g_clog;
     app.log.constantPrefix = "app";
+    app.listener = 0;
+    app.connector = 0;
 
     while (!g_quit) {
         MonotonicTimeMs now = monotonicTimeMsNow();
