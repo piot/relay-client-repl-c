@@ -53,6 +53,8 @@ typedef struct App {
     RelayListener* listener;
     RelayConnector* connector;
     Clog log;
+#define tempBufSize (1200)
+    uint8_t tempBuf[tempBufSize];
 } App;
 
 static void onState(void* _self, const void* data, ClashResponse* response)
@@ -127,10 +129,154 @@ static void onConnect(void* _self, const void* _data, ClashResponse* response)
     self->connector
         = relayClientStartConnect(&self->relayClient.relayClient, userId, applicationId, channelId);
 
-        (void) response;
+    (void)response;
 }
 
+typedef struct ListenerReadCmd {
+    int verbose;
+} ListenerReadCmd;
+
+typedef struct ListenerWriteCmd {
+    int connectionIndex;
+    const char* payload;
+} ListenerWriteCmd;
+
+static void onListenerRead(void* _self, const void* _data, ClashResponse* response)
+{
+    App* self = (App*)_self;
+    if (self->listener == 0) {
+        CLOG_C_WARN(&self->log, "no listener")
+        return;
+    }
+
+    (void)_data;
+    //const ListenerReadCmd* data = (const ListenerReadCmd*)_data;
+    uint8_t connectionIndex;
+
+    ssize_t octetCount
+        = relayListenerReceivePacket(self->listener, &connectionIndex, self->tempBuf, tempBufSize);
+    if (octetCount <= 0) {
+        return;
+    }
+
+    self->tempBuf[octetCount] = 0;
+
+    CLOG_C_DEBUG(&self->log, "received packet '%s'", (const char*)self->tempBuf)
+
+    (void)response;
+}
+
+static void onListenerWrite(void* _self, const void* _data, ClashResponse* response)
+{
+    App* self = (App*)_self;
+    if (self->listener == 0) {
+        CLOG_C_WARN(&self->log, "no listener")
+        return;
+    }
+
+    const ListenerWriteCmd* data = (const ListenerWriteCmd*)_data;
+
+    ssize_t result = relayListenerSendToConnectionIndex(self->listener,
+        (size_t)data->connectionIndex, (const uint8_t*)data->payload, tc_strlen(data->payload));
+    if (result < 0) {
+        CLOG_C_WARN(&self->log, "could not send to connection index %d", data->connectionIndex)
+        return;
+    }
+
+    CLOG_C_DEBUG(
+        &self->log, "sent '%s' to connection index %d", data->payload, data->connectionIndex)
+
+    (void)response;
+}
+
+typedef struct ConnectorReadCmd {
+    int verbose;
+} ConnectorReadCmd;
+
+typedef struct ConnectorWriteCmd {
+    const char* payload;
+} ConnectorWriteCmd;
+
+static void onConnectorRead(void* _self, const void* _data, ClashResponse* response)
+{
+    App* self = (App*)_self;
+    if (self->listener == 0) {
+        CLOG_C_WARN(&self->log, "no listener")
+        return;
+    }
+
+    (void)_data;
+
+    //const ConnectorReadCmd* data = (const ConnectorReadCmd*)_data;
+
+    for (size_t i = 0; i < 3; ++i) {
+        ssize_t octetsReceived = datagramTransportReceive(
+            &self->connector->connectorTransport, self->tempBuf, tempBufSize);
+        if (octetsReceived <= 0) {
+            return;
+        }
+        self->tempBuf[octetsReceived] = 0;
+
+        printf("received: '%s'", self->tempBuf);
+    }
+
+    (void)response;
+}
+
+static void onConnectorWrite(void* _self, const void* _data, ClashResponse* response)
+{
+    App* self = (App*)_self;
+    if (self->listener == 0) {
+        CLOG_C_WARN(&self->log, "no listener")
+        return;
+    }
+
+    const ConnectorWriteCmd* data = (const ConnectorWriteCmd*)_data;
+
+    int result = datagramTransportSend(&self->connector->connectorTransport,
+        (const uint8_t*)data->payload, tc_strlen(data->payload));
+    if (result < 0) {
+        CLOG_C_WARN(&self->log, "result %d", result)
+        return;
+    }
+    CLOG_C_DEBUG(&self->log, "sent '%s'", data->payload)
+    (void)response;
+}
+
+static ClashOption listenerWriteOptions[] = {
+    { "connection", 'c', "the connection index to write to", ClashTypeInt | ClashTypeArg, "0",
+        offsetof(ListenerWriteCmd, connectionIndex) },
+    { "payload", 'p', "the application ID", ClashTypeString | ClashTypeArg, "data",
+        offsetof(ListenerWriteCmd, payload) },
+};
+
+static ClashCommand listenerCommands[] = {
+    { "read", "Read from listener", sizeof(struct ListenerReadCmd), 0, 0, 0, 0,
+        (ClashFn)onListenerRead },
+    { "write", "Write to a listener", sizeof(struct ListenerWriteCmd), listenerWriteOptions,
+        sizeof(listenerWriteOptions) / sizeof(listenerWriteOptions[0]), 0, 0,
+        (ClashFn)onListenerWrite },
+};
+
+static ClashOption connectorWriteOptions[] = {
+    { "payload", 'p', "the application ID", ClashTypeString | ClashTypeArg, "data",
+        offsetof(ListenerWriteCmd, payload) },
+};
+
+static ClashCommand connectorCommands[] = {
+    { "read", "Read from connector", sizeof(struct ConnectorReadCmd), 0, 0, 0, 0,
+        (ClashFn)onConnectorRead },
+    { "write", "Write to a connector", sizeof(struct ConnectorWriteCmd), connectorWriteOptions,
+        sizeof(connectorWriteOptions) / sizeof(connectorWriteOptions[0]), 0, 0,
+        (ClashFn)onConnectorWrite },
+};
+
 static ClashCommand mainCommands[] = {
+    { "listener", "use listener", 0, 0, 0, listenerCommands,
+        sizeof(listenerCommands) / sizeof(listenerCommands[0]), 0 },
+    { "connector", "use connector", 0, 0, 0, connectorCommands,
+        sizeof(connectorCommands) / sizeof(connectorCommands[0]), 0 },
+
     { "listen", "start listening on relay server", sizeof(ListenCmd), listenOptions,
         sizeof(listenOptions) / sizeof(listenOptions[0]), 0, 0, onListen },
     { "connect", "start connecting to listener on relay server", sizeof(ConnectCmd), connectOptions,
