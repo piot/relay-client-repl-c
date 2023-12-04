@@ -11,10 +11,8 @@
 #include <guise-client-udp/client.h>
 #include <guise-client-udp/read_secret.h>
 #include <imprint/default_setup.h>
-#include <inttypes.h>
 #include <redline/edit.h>
 #include <relay-client-udp/client.h>
-#include <relay-client/debug.h>
 #include <signal.h>
 
 clog_config g_clog;
@@ -46,12 +44,40 @@ static void drawPrompt(RedlineEdit* edit)
     redlineEditPrompt(edit, "relay> ");
 }
 
+typedef struct AppListenerConnection {
+    uint8_t connectionId;
+} AppListenerConnection;
+
+typedef struct AppListenerConnections {
+    AppListenerConnection connections[8];
+    uint8_t count;
+} AppListenerConnections;
+
+static AppListenerConnection* appListenerConnectionsFind(
+    AppListenerConnections* self, uint8_t index)
+{
+    for (size_t i = 0; i < self->count; ++i) {
+        if (self->connections[i].connectionId == index) {
+            return &self->connections[i];
+        }
+    }
+
+    return 0;
+}
+
+static void appListenerConnectionsAdd(AppListenerConnections* self, uint8_t index)
+{
+    self->connections[self->count++].connectionId = index;
+}
+
 typedef struct App {
     const char* secret;
     RelayClientUdp relayClient;
     bool hasStartedRelayClient;
     RelayListener* listener;
+    AppListenerConnections listenerConnections;
     RelayConnector* connector;
+
     Clog log;
 #define tempBufSize (1200)
     uint8_t tempBuf[tempBufSize];
@@ -226,8 +252,8 @@ static void onConnectorRead(void* _self, const void* _data, ClashResponse* respo
 static void onConnectorWrite(void* _self, const void* _data, ClashResponse* response)
 {
     App* self = (App*)_self;
-    if (self->listener == 0) {
-        CLOG_C_WARN(&self->log, "no listener")
+    if (self->connector == 0) {
+        CLOG_C_WARN(&self->log, "no connector")
         return;
     }
 
@@ -260,7 +286,7 @@ static ClashCommand listenerCommands[] = {
 
 static ClashOption connectorWriteOptions[] = {
     { "payload", 'p', "the application ID", ClashTypeString | ClashTypeArg, "data",
-        offsetof(ListenerWriteCmd, payload) },
+        offsetof(ConnectorWriteCmd, payload) },
 };
 
 static ClashCommand connectorCommands[] = {
@@ -285,11 +311,56 @@ static ClashCommand mainCommands[] = {
 };
 
 static ClashDefinition commands = { mainCommands, sizeof(mainCommands) / sizeof(mainCommands[0]) };
-
 static void outputChangesIfAny(App* app, RedlineEdit* edit)
 {
-    (void)app;
-    (void)edit;
+    static const size_t RECEIVE_COUNT = 32;
+
+    if (app->listener != 0) {
+        uint8_t connectionIndex;
+
+        for (size_t i = 0; i < RECEIVE_COUNT; ++i) {
+            ssize_t octetsReceived = relayListenerReceivePacket(
+                app->listener, &connectionIndex, app->tempBuf, tempBufSize);
+            if (octetsReceived <= 0) {
+                break;
+            }
+
+            AppListenerConnection* connection
+                = appListenerConnectionsFind(&app->listenerConnections, connectionIndex);
+            if (connection == 0) {
+                CLOG_C_DEBUG(
+                    &app->log, "listener accepting incoming connection %hhu", connectionIndex)
+                relayListenerSendToConnectionIndex(
+                    app->listener, connectionIndex, (const uint8_t*)"accepted", 9);
+                appListenerConnectionsAdd(&app->listenerConnections, connectionIndex);
+            }
+            app->tempBuf[octetsReceived] = 0;
+            redlineEditRemove(edit);
+
+            printf("listener received: connectionIndex:%hhu data:'%s'\n", connectionIndex,
+                app->tempBuf);
+
+            drawPrompt(edit);
+            redlineEditBringback(edit);
+        }
+    }
+
+    if (app->connector != 0) {
+        for (size_t i = 0; i < RECEIVE_COUNT; ++i) {
+            ssize_t octetsReceived = datagramTransportReceive(
+                &app->connector->connectorTransport, app->tempBuf, tempBufSize);
+            if (octetsReceived <= 0) {
+                break;
+            }
+            app->tempBuf[octetsReceived] = 0;
+
+            redlineEditRemove(edit);
+            printf("connector received: '%s'\n", app->tempBuf);
+
+            drawPrompt(edit);
+            redlineEditBringback(edit);
+        }
+    }
 }
 
 int main(int argc, char** argv)
@@ -338,6 +409,8 @@ int main(int argc, char** argv)
     app.log.constantPrefix = "app";
     app.listener = 0;
     app.connector = 0;
+    app.listenerConnections.count = 0;
+    app.listenerConnections.connections[0].connectionId = 0;
 
     while (!g_quit) {
         MonotonicTimeMs now = monotonicTimeMsNow();

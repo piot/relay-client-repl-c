@@ -9,3 +9,8 @@ src/lib/conclave-client-cli
 build
 users.txt
 src/lib/relay-client-repl
+.cmake/
+.idea/
+Testing/
+.ninja*
+*.ninja
